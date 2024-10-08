@@ -1,0 +1,252 @@
+// config/Database.php
+class Database {
+    private $host = "localhost";
+    private $db_name = "blog_db";
+    private $username = "root";
+    private $password = "";
+    private $conn;
+
+    public function getConnection() {
+        $this->conn = null;
+        try {
+            $this->conn = new PDO(
+                "mysql:host=" . $this->host . ";dbname=" . $this->db_name,
+                $this->username,
+                $this->password
+            );
+            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        } catch(PDOException $e) {
+            echo "Errore di connessione: " . $e->getMessage();
+        }
+        return $this->conn;
+    }
+}
+
+// models/User.php
+class User {
+    private $conn;
+    private $table_name = "users";
+
+    public $id;
+    public $username;
+    public $password;
+    public $email;
+    public $created_at;
+
+    public function __construct($db) {
+        $this->conn = $db;
+    }
+
+    public function create() {
+        $query = "INSERT INTO " . $this->table_name . " 
+                 SET username=:username, password=:password, email=:email";
+        
+        $stmt = $this->conn->prepare($query);
+
+        $this->username = htmlspecialchars(strip_tags($this->username));
+        $this->password = password_hash($this->password, PASSWORD_BCRYPT);
+        $this->email = htmlspecialchars(strip_tags($this->email));
+
+        $stmt->bindParam(":username", $this->username);
+        $stmt->bindParam(":password", $this->password);
+        $stmt->bindParam(":email", $this->email);
+
+        return $stmt->execute();
+    }
+
+    public function login($username, $password) {
+        $query = "SELECT id, username, password FROM " . $this->table_name . " 
+                 WHERE username = :username LIMIT 1";
+        
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(":username", $username);
+        $stmt->execute();
+
+        if($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if(password_verify($password, $row['password'])) {
+                return $row;
+            }
+        }
+        return false;
+    }
+}
+
+// models/Post.php
+class Post {
+    private $conn;
+    private $table_name = "posts";
+
+    public $id;
+    public $title;
+    public $content;
+    public $category_id;
+    public $user_id;
+    public $created_at;
+
+    public function __construct($db) {
+        $this->conn = $db;
+    }
+
+    public function create() {
+        $query = "INSERT INTO " . $this->table_name . " 
+                 SET title=:title, content=:content, 
+                     category_id=:category_id, user_id=:user_id";
+
+        $stmt = $this->conn->prepare($query);
+
+        $this->title = htmlspecialchars(strip_tags($this->title));
+        $this->content = htmlspecialchars(strip_tags($this->content));
+
+        $stmt->bindParam(":title", $this->title);
+        $stmt->bindParam(":content", $this->content);
+        $stmt->bindParam(":category_id", $this->category_id);
+        $stmt->bindParam(":user_id", $this->user_id);
+
+        return $stmt->execute();
+    }
+
+    public function read() {
+        $query = "SELECT p.*, c.name as category_name, u.username 
+                 FROM " . $this->table_name . " p
+                 LEFT JOIN categories c ON p.category_id = c.id
+                 LEFT JOIN users u ON p.user_id = u.id
+                 ORDER BY p.created_at DESC";
+
+        $stmt = $this->conn->prepare($query);
+        $stmt->execute();
+        return $stmt;
+    }
+
+    public function update() {
+        $query = "UPDATE " . $this->table_name . "
+                 SET title=:title, content=:content, category_id=:category_id
+                 WHERE id=:id AND user_id=:user_id";
+
+        $stmt = $this->conn->prepare($query);
+
+        $this->title = htmlspecialchars(strip_tags($this->title));
+        $this->content = htmlspecialchars(strip_tags($this->content));
+
+        $stmt->bindParam(":title", $this->title);
+        $stmt->bindParam(":content", $this->content);
+        $stmt->bindParam(":category_id", $this->category_id);
+        $stmt->bindParam(":id", $this->id);
+        $stmt->bindParam(":user_id", $this->user_id);
+
+        return $stmt->execute();
+    }
+
+    public function delete() {
+        $query = "DELETE FROM " . $this->table_name . " 
+                 WHERE id=:id AND user_id=:user_id";
+
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(":id", $this->id);
+        $stmt->bindParam(":user_id", $this->user_id);
+
+        return $stmt->execute();
+    }
+}
+
+// controllers/UserController.php
+class UserController {
+    private $db;
+    private $user;
+
+    public function __construct() {
+        $database = new Database();
+        $this->db = $database->getConnection();
+        $this->user = new User($this->db);
+    }
+
+    public function register() {
+        if($_SERVER["REQUEST_METHOD"] == "POST") {
+            $this->user->username = $_POST['username'];
+            $this->user->password = $_POST['password'];
+            $this->user->email = $_POST['email'];
+
+            if($this->user->create()) {
+                header("Location: login.php");
+            } else {
+                echo "Errore nella registrazione.";
+            }
+        }
+    }
+
+    public function login() {
+        if($_SERVER["REQUEST_METHOD"] == "POST") {
+            $username = $_POST['username'];
+            $password = $_POST['password'];
+
+            if($user = $this->user->login($username, $password)) {
+                session_start();
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['username'] = $user['username'];
+                header("Location: index.php");
+            } else {
+                echo "Login fallito.";
+            }
+        }
+    }
+}
+
+// controllers/PostController.php
+class PostController {
+    private $db;
+    private $post;
+
+    public function __construct() {
+        $database = new Database();
+        $this->db = $database->getConnection();
+        $this->post = new Post($this->db);
+    }
+
+    public function index() {
+        $stmt = $this->post->read();
+        include 'views/posts/index.php';
+    }
+
+    public function create() {
+        if($_SERVER["REQUEST_METHOD"] == "POST") {
+            $this->post->title = $_POST['title'];
+            $this->post->content = $_POST['content'];
+            $this->post->category_id = $_POST['category_id'];
+            $this->post->user_id = $_SESSION['user_id'];
+
+            if($this->post->create()) {
+                header("Location: index.php");
+            } else {
+                echo "Errore nella creazione del post.";
+            }
+        }
+        include 'views/posts/create.php';
+    }
+}
+
+// views/posts/index.php
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Blog - Posts</title>
+</head>
+<body>
+    <h1>Posts</h1>
+    <?php if(isset($_SESSION['user_id'])): ?>
+        <a href="create_post.php">Nuovo Post</a>
+    <?php endif; ?>
+
+    <?php while($row = $stmt->fetch(PDO::FETCH_ASSOC)): ?>
+        <article>
+            <h2><?php echo htmlspecialchars($row['title']); ?></h2>
+            <p>Categoria: <?php echo htmlspecialchars($row['category_name']); ?></p>
+            <p>Autore: <?php echo htmlspecialchars($row['username']); ?></p>
+            <p><?php echo htmlspecialchars($row['content']); ?></p>
+            <?php if(isset($_SESSION['user_id']) && $_SESSION['user_id'] == $row['user_id']): ?>
+                <a href="edit_post.php?id=<?php echo $row['id']; ?>">Modifica</a>
+                <a href="delete_post.php?id=<?php echo $row['id']; ?>">Elimina</a>
+            <?php endif; ?>
+        </article>
+    <?php endwhile; ?>
+</body>
+</html>
